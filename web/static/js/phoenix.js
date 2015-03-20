@@ -14,7 +14,7 @@ export class Channel {
   rejoin(){
     this.reset()
     this.onError( reason => this.rejoin() )
-    this.socket.send({topic: this.topic, event: "join", payload: this.message})
+    this.socket.send({topic: this.topic, event: "join", payload: this.message, ref: null})
     this.callback(this)
   }
 
@@ -35,12 +35,42 @@ export class Channel {
 
   off(event){ this.bindings = this.bindings.filter( bind => bind.event !== event ) }
 
-  trigger(triggerEvent, msg){
+  trigger(triggerEvent, msg, ref){
+    if(this.isReplyEvent(triggerEvent)){ triggerEvent = this.replyEventName(ref) }
+
     this.bindings.filter( bind => bind.event === triggerEvent )
                  .map( bind => bind.callback(msg) )
   }
 
-  send(event, payload){ this.socket.send({topic: this.topic, event: event, payload: payload}) }
+  cast(event, payload){
+    this.socket.send({topic: this.topic, event: event, payload: payload, ref: null})
+  }
+
+  call(event, payload){
+    var self     = this
+    var ref      = this.socket.makeRef()
+    var refEvent = this.replyEventName(ref)
+
+    this.socket.send({topic: this.topic, event: event, payload: payload, ref: ref})
+
+    return({
+      receive: function(callback){
+        self.on(refEvent, payload => {
+          callback(payload)
+          self.off(refEvent)
+        })
+        return this
+      },
+      after: function(ms, callback){
+        setTimeout(callback, ms)
+        return this
+      }
+    })
+  }
+
+  isReplyEvent(event){ return event === "chan_reply" }
+
+  replyEventName(ref){ return `chan_reply_${ref}` }
 
   leave(message = {}){
     this.socket.leave(this.topic, message)
@@ -76,6 +106,7 @@ export class Socket {
     this.heartbeatIntervalMs  = 30000
     this.channels             = []
     this.sendBuffer           = []
+    this.ref           = 0
 
     this.transport = opts.transport || window.WebSocket || LongPoller
     this.heartbeatIntervalMs = opts.heartbeatIntervalMs || this.heartbeatIntervalMs
@@ -178,7 +209,7 @@ export class Socket {
   }
 
   leave(topic, message = {}){
-    this.send({topic: topic, event: "leave", payload: message})
+    this.send({topic: topic, event: "leave", payload: message, ref: null})
     this.channels = this.channels.filter( c => !c.isMember(topic) )
   }
 
@@ -192,8 +223,16 @@ export class Socket {
     }
   }
 
+  // Return the next message ref, accounting for overflows
+  makeRef(){
+    let newRef = this.ref + 1
+    if(newRef === this.ref){ this.ref = 0 } else { this.ref = newRef }
+
+    return this.ref.toString()
+  }
+
   sendHeartbeat(){
-    this.send({topic: "phoenix", event: "heartbeat", payload: {}})
+    this.send({topic: "phoenix", event: "heartbeat", payload: {}, ref: null})
   }
 
   flushSendBuffer(){
@@ -207,9 +246,9 @@ export class Socket {
   onConnMessage(rawMessage){
     this.log("message received:")
     this.log(rawMessage)
-    let {topic, event, payload} = JSON.parse(rawMessage.data)
+    let {topic, event, payload, ref} = JSON.parse(rawMessage.data)
     this.channels.filter( chan => chan.isMember(topic) )
-                 .forEach( chan => chan.trigger(event, payload) )
+                 .forEach( chan => chan.trigger(event, payload, ref) )
     this.stateChangeCallbacks.message.forEach( callback => {
       callback(topic, event, payload)
     })

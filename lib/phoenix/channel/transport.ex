@@ -57,6 +57,7 @@ defmodule Phoenix.Channel.Transport do
   def dispatch(%Message{} = msg, sockets, transport_pid, router, pubsub_server, transport) do
     sockets
     |> HashDict.get(msg.topic)
+    # TODO handle msg.ref when I get back to this :)
     |> dispatch(msg.topic, msg.event, msg.payload, transport_pid, router, pubsub_server, transport)
   end
 
@@ -65,9 +66,10 @@ defmodule Phoenix.Channel.Transport do
 
   The Message format sent to phoenix requires the following key / values:
 
-    * topic - The String value "phoenix"
-    * event - The String value "heartbeat"
-    * payload - An empty JSON message payload, ie {}
+    * `topic` - The String value "phoenix"
+    * `event` - The String value "heartbeat"
+    * `payload` - An empty JSON message payload, ie {}
+    * `ref` - The optional message ref for sync calls, `nil` for an async message
 
   The server will respond to heartbeats with the same message
   """

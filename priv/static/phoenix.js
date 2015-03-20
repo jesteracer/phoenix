@@ -116,7 +116,7 @@ var Channel = exports.Channel = (function () {
     this.onError(function (reason) {
       return _this.rejoin();
     });
-    this.socket.send({ topic: this.topic, event: "join", payload: this.message });
+    this.socket.send({ topic: this.topic, event: "join", payload: this.message, ref: null });
     this.callback(this);
   };
 
@@ -151,7 +151,11 @@ var Channel = exports.Channel = (function () {
     });
   };
 
-  Channel.prototype.trigger = function trigger(triggerEvent, msg) {
+  Channel.prototype.trigger = function trigger(triggerEvent, msg, ref) {
+    if (this.isReplyEvent(triggerEvent)) {
+      triggerEvent = this.replyEventName(ref);
+    }
+
     this.bindings.filter(function (bind) {
       return bind.event === triggerEvent;
     }).map(function (bind) {
@@ -159,8 +163,38 @@ var Channel = exports.Channel = (function () {
     });
   };
 
-  Channel.prototype.send = function send(event, payload) {
-    this.socket.send({ topic: this.topic, event: event, payload: payload });
+  Channel.prototype.cast = function cast(event, payload) {
+    this.socket.send({ topic: this.topic, event: event, payload: payload, ref: null });
+  };
+
+  Channel.prototype.call = function call(event, payload) {
+    var self = this;
+    var ref = this.socket.makeRef();
+    var refEvent = this.replyEventName(ref);
+
+    this.socket.send({ topic: this.topic, event: event, payload: payload, ref: ref });
+
+    return {
+      receive: function receive(callback) {
+        self.on(refEvent, function (payload) {
+          callback(payload);
+          self.off(refEvent);
+        });
+        return this;
+      },
+      after: function after(ms, callback) {
+        setTimeout(callback, ms);
+        return this;
+      }
+    };
+  };
+
+  Channel.prototype.isReplyEvent = function isReplyEvent(event) {
+    return event === "chan_reply";
+  };
+
+  Channel.prototype.replyEventName = function replyEventName(ref) {
+    return "chan_reply_" + ref;
   };
 
   Channel.prototype.leave = function leave() {
@@ -205,6 +239,7 @@ var Socket = exports.Socket = (function () {
     this.heartbeatIntervalMs = 30000;
     this.channels = [];
     this.sendBuffer = [];
+    this.ref = 0;
 
     this.transport = opts.transport || window.WebSocket || LongPoller;
     this.heartbeatIntervalMs = opts.heartbeatIntervalMs || this.heartbeatIntervalMs;
@@ -374,7 +409,7 @@ var Socket = exports.Socket = (function () {
   Socket.prototype.leave = function leave(topic) {
     var message = arguments[1] === undefined ? {} : arguments[1];
 
-    this.send({ topic: topic, event: "leave", payload: message });
+    this.send({ topic: topic, event: "leave", payload: message, ref: null });
     this.channels = this.channels.filter(function (c) {
       return !c.isMember(topic);
     });
@@ -393,8 +428,21 @@ var Socket = exports.Socket = (function () {
     }
   };
 
+  // Return the next message ref, accounting for overflows
+
+  Socket.prototype.makeRef = function makeRef() {
+    var newRef = this.ref + 1;
+    if (newRef === this.ref) {
+      this.ref = 0;
+    } else {
+      this.ref = newRef;
+    }
+
+    return this.ref.toString();
+  };
+
   Socket.prototype.sendHeartbeat = function sendHeartbeat() {
-    this.send({ topic: "phoenix", event: "heartbeat", payload: {} });
+    this.send({ topic: "phoenix", event: "heartbeat", payload: {}, ref: null });
   };
 
   Socket.prototype.flushSendBuffer = function flushSendBuffer() {
@@ -416,11 +464,12 @@ var Socket = exports.Socket = (function () {
     var topic = _JSON$parse.topic;
     var event = _JSON$parse.event;
     var payload = _JSON$parse.payload;
+    var ref = _JSON$parse.ref;
 
     this.channels.filter(function (chan) {
       return chan.isMember(topic);
     }).forEach(function (chan) {
-      return chan.trigger(event, payload);
+      return chan.trigger(event, payload, ref);
     });
     this.stateChangeCallbacks.message.forEach(function (callback) {
       callback(topic, event, payload);
