@@ -17,4 +17,10 @@ defmodule Phoenix.Transports.JSONSerializer do
     |> Poison.decode!
     |> Phoenix.Socket.Message.from_map!
   end
+
+  def decode!(message, _) do
+    message
+    |> Poison.decode!
+    |> Phoenix.Socket.Message.from_map!
+  end
 end
